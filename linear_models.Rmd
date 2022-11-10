@@ -1,0 +1,281 @@
+---
+title: "listcolumn"
+output: github_document
+---
+
+```{r setup, include = FALSE}
+library(tidyverse)
+
+set.seed(1)
+library(rvest)
+
+knitr::opts_chunk$set(
+  fig.width = 6,
+  fig.asp = .6,
+  out.width = "90%",
+  warning = FALSE,
+  message = FALSE)
+
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+
+options(
+  ggplot2.continuous.colour = "viridis",
+  ggplot2.continuous.fill = "viridis"
+)
+
+scale_colour_discrete = scale_colour_viridis_d
+scale_fill_discrete = scale_fill_viridis_d
+```
+
+## lists
+```{r}
+vec_numeric = 5:8
+vec_char = c("My", "name", "is", "Jeff")
+vec_logical = c(TRUE, TRUE, TRUE, FALSE)
+```
+ 
+```{r}
+l = list(
+  vec_numeric = 5:8,
+  mat = matrix(1:8,2,4),
+  vec_logical = c(TRUE, FALSE),
+  summary = summary(rnorm(1000))
+)
+
+l
+```
+accessing list items
+
+```{r}
+l$vec_numeric
+
+l[[3]]
+```
+## loops
+
+write a 'for' loop
+
+```{r}
+list_norm = list(
+  a = rnorm(20,5,4),
+  b = rnorm(20, 0, 5),
+  c = rnorm(20, 10, .2),
+  d = rnorm(20, -3, 1)
+)
+```
+
+```{r}
+mean_and_sd = function(x) {
+  
+  if (!is.numeric(x)) {
+    stop("Argument x should be numeric")
+  } else if (length(x) == 1) {
+    stop("Cannot be computed for length 1 vectors")
+  }
+  
+  mean_x = mean(x)
+  sd_x = sd(x)
+
+  tibble(
+    mean = mean_x, 
+    sd = sd_x
+  )
+}
+```
+
+```{r}
+output = vector("list", length = 4)
+
+for (i in 1:4) {
+  output[[i]] = mean_and_sd(list_norm[[i]])
+}
+
+output[[1]]
+output
+```
+
+## can we map 
+
+```{r}
+map(list_norm, mean_and_sd)
+```
+
+what about other functions
+```{r}
+map(list_norm, summary)
+```
+
+map variants
+```{r}
+map_dbl(list_norm, median)
+map_df(list_norm, mean_and_sd)
+```
+
+## list columns 
+
+```{r}
+listcol_df = 
+  tibble(
+    name = c("a", "b", "c",  "d"),
+    norm = list_norm
+  )
+
+listcol_df[["norm"]]
+
+map(listcol_df[["norm"]], mean_and_sd)
+```
+
+can we add list columns 
+
+```{r}
+listcol_df %>% 
+  mutate(
+    m_sd = map_df(norm, mean_and_sd) 
+  ) %>% 
+  select(-norm)
+```
+
+## revisit weather dataset
+
+```{r}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728", "USC00519397", "USS0023B17S"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(  
+      id, 
+      USW00094728 = "CentralPark_NY", 
+      USC00519397 = "Waikiki_HA",
+      USS0023B17S = "Waterhole_WA"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
+
+let's nest within weather stations...
+
+```{r}
+weather_nest_df =
+  weather_df %>% 
+  nest(data = date:tmin)
+```
+
+really is a list column
+
+```{r}
+weather_nest_df[["data"]]
+```
+
+
+take the central park data and do linear regression
+```{r}
+weather_nest_df[["data"]][[1]]
+
+lm(tmax ~ tmin, data = weather_nest_df[["data"]][[1]])
+```
+
+ lets write a short lil ol function
+ 
+```{r}
+weather_lm = function(df) {
+  lm(tmax ~ tmin, data = df)
+}
+
+map(weather_nest_df[["data"]], weather_lm)
+```
+ 
+ can i do all this in a tidy way
+ 
+```{r}
+weather_nest_df %>% 
+  mutate(
+    model = map(data, weather_lm)
+  )
+```
+ 
+ unnesting
+ 
+```{r}
+weather_nest_df %>% 
+  unnest(data)
+```
+ 
+## Napoleon!
+
+here's my scraping function that works for a single page
+
+```{r}
+read_page_reviews <- function(url) {
+  
+  html = read_html(url)
+  
+  review_titles = 
+    html %>%
+    html_nodes(".a-text-bold span") %>%
+    html_text()
+  
+  review_stars = 
+    html %>%
+    html_nodes("#cm_cr-review_list .review-rating") %>%
+    html_text() %>%
+    str_extract("^\\d") %>%
+    as.numeric()
+  
+  review_text = 
+    html %>%
+    html_nodes(".review-text-content span") %>%
+    html_text() %>% 
+    str_replace_all("\n", "") %>% 
+    str_trim() %>% 
+    str_subset("The media could not be loaded.", negate = TRUE) %>% 
+    str_subset("^$", negate = TRUE)
+  
+  tibble(
+    title = review_titles,
+    stars = review_stars,
+    text = review_text
+  )
+}
+```
+
+```{r}
+url_base = "https://www.amazon.com/product-reviews/B00005JNBQ/ref=cm_cr_arp_d_viewopt_rvwer?ie=UTF8&reviewerType=avp_only_reviews&sortBy=recent&pageNumber="
+vec_urls = str_c(url_base, 1:5)
+```
+
+```{r}
+map(vec_urls, read_page_reviews)
+
+napoleon_reviews =
+  tibble(
+    page = 1:5,
+    page_url = str_c(url_base, page)
+  ) %>% 
+  mutate(
+    reviews = map(page_url, read_page_reviews)
+  )
+
+napoleon_reviews %>% 
+  select(-page_url) %>% 
+  unnest(reviews)
+```
+
+
+```{r}
+output = vector("list", 5)
+
+for (i in 1:5) {
+  output[[i]] = read_page_reviews(vec_urls[[i]])
+}
+
+dynamite_reviews = bind_rows(output)
+
+dynamite_reviews = map_df(vec_urls, read_page_reviews)
+```
+
+  
+  
+  
